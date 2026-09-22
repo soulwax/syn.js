@@ -60,6 +60,24 @@ describe("analyzeAudio", () => {
     ]);
   });
 
+  it("rejects unknown file extensions in strict mode but tolerates generic MIME metadata", async () => {
+    await expect(
+      analyzeAudio(
+        waveFixture(),
+        { fileName: "tone.txt", mimeType: "application/octet-stream" },
+        { strictHints: true },
+      ),
+    ).rejects.toMatchObject({ code: "hint_mismatch" });
+
+    await expect(
+      analyzeAudio(
+        waveFixture(),
+        { fileName: "tone.wav", mimeType: "application/octet-stream" },
+        { strictHints: true },
+      ),
+    ).resolves.toMatchObject({ format: { id: "wav" } });
+  });
+
   it.each([
     [new Uint8Array(), "empty_input"],
     [Uint8Array.from([1, 2, 3]), "unsupported_format"],

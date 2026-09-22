@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Strict hint validation now rejects unknown filename extensions and non-generic MIME declarations.
+- Commit distributable output so Syn can consume the checked submodule before the first npm release.
+
 ## [0.1.0] - 2026-09-22
 
 ### Added

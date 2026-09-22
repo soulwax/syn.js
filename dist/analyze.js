@@ -1,0 +1,118 @@
+import { parseBuffer } from "music-metadata";
+import { AudioMetadataError } from "./errors.js";
+import { detectAudioFormat, findAudioFormatByExtension, findAudioFormatByMimeType, } from "./formats.js";
+import { normalizeMetadata, } from "./metadata.js";
+const DEFAULT_MAX_FILE_BYTES = 128 * 1024 * 1024;
+const DEFAULT_MAX_ARTWORK_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_ARTWORK_COUNT = 4;
+function positiveLimit(value, fallback, name) {
+    const resolved = value ?? fallback;
+    if (!Number.isSafeInteger(resolved) || resolved <= 0) {
+        throw new RangeError(`${name} must be a positive safe integer.`);
+    }
+    return resolved;
+}
+function abortIfNeeded(signal) {
+    if (signal?.aborted) {
+        throw new AudioMetadataError("aborted", "Audio analysis was aborted.", {
+            cause: signal.reason,
+        });
+    }
+}
+async function bytesFrom(input, maxFileBytes) {
+    const knownSize = input instanceof Blob ? input.size : input.byteLength;
+    if (knownSize === 0)
+        throw new AudioMetadataError("empty_input", "Audio input is empty.");
+    if (knownSize > maxFileBytes) {
+        throw new AudioMetadataError("file_too_large", "Audio input exceeds the configured size limit.");
+    }
+    if (input instanceof Blob)
+        return new Uint8Array(await input.arrayBuffer());
+    if (input instanceof Uint8Array)
+        return input;
+    return new Uint8Array(input);
+}
+function hintWarnings(detectedId, hints) {
+    const warnings = [];
+    const declaredMimeType = hints?.mimeType
+        ?.trim()
+        .toLowerCase()
+        .split(";", 1)[0];
+    const mimeFormat = hints?.mimeType
+        ? findAudioFormatByMimeType(hints.mimeType)
+        : null;
+    if (declaredMimeType &&
+        declaredMimeType !== "application/octet-stream" &&
+        mimeFormat?.id !== detectedId) {
+        warnings.push({
+            code: "mime_mismatch",
+            message: "The declared MIME type does not match the detected audio format.",
+        });
+    }
+    const fileName = hints?.fileName?.trim() ?? "";
+    const extensionFormat = fileName
+        ? findAudioFormatByExtension(fileName)
+        : null;
+    const extension = fileName.split(".").at(-1);
+    const hasExtension = Boolean(extension && extension !== fileName);
+    if (hasExtension && extensionFormat?.id !== detectedId) {
+        warnings.push({
+            code: "extension_mismatch",
+            message: "The filename extension does not match the detected audio format.",
+        });
+    }
+    return warnings;
+}
+export async function analyzeAudio(input, hints, options = {}) {
+    const maxFileBytes = positiveLimit(options.maxFileBytes, DEFAULT_MAX_FILE_BYTES, "maxFileBytes");
+    const maxArtworkBytes = positiveLimit(options.maxArtworkBytes, DEFAULT_MAX_ARTWORK_BYTES, "maxArtworkBytes");
+    const maxArtworkCount = positiveLimit(options.maxArtworkCount, DEFAULT_MAX_ARTWORK_COUNT, "maxArtworkCount");
+    abortIfNeeded(options.signal);
+    const bytes = await bytesFrom(input, maxFileBytes);
+    abortIfNeeded(options.signal);
+    if (hints?.size !== undefined && hints.size !== bytes.byteLength) {
+        throw new AudioMetadataError("hint_mismatch", "The declared size does not match the audio input.");
+    }
+    const detected = detectAudioFormat(bytes);
+    if (!detected) {
+        throw new AudioMetadataError("unsupported_format", "The audio format is not supported.");
+    }
+    const warnings = hintWarnings(detected.id, hints);
+    if (options.strictHints && warnings.length > 0) {
+        throw new AudioMetadataError("hint_mismatch", "Declared audio hints do not match the detected format.");
+    }
+    try {
+        const parsed = await parseBuffer(bytes, {
+            mimeType: detected.contentType,
+            size: bytes.byteLength,
+            ...(hints?.fileName ? { path: hints.fileName } : {}),
+        }, {
+            duration: options.duration ?? true,
+            skipCovers: !(options.includeArtwork ?? false),
+        });
+        const hasAudioProperties = Boolean(parsed.format.codec) ||
+            (parsed.format.sampleRate ?? 0) > 0 ||
+            (parsed.format.numberOfChannels ?? 0) > 0 ||
+            (parsed.format.bitrate ?? 0) > 0;
+        if (!hasAudioProperties) {
+            throw new AudioMetadataError("malformed_audio", "The file has no parseable audio stream.");
+        }
+        abortIfNeeded(options.signal);
+        return normalizeMetadata(detected, parsed, {
+            includeArtwork: options.includeArtwork ?? false,
+            maxArtworkBytes,
+            maxArtworkCount,
+        }, warnings);
+    }
+    catch (cause) {
+        if (cause instanceof AudioMetadataError)
+            throw cause;
+        if (cause instanceof Error) {
+            throw new AudioMetadataError("malformed_audio", "The audio file could not be parsed.", {
+                cause,
+            });
+        }
+        throw new AudioMetadataError("parser_failure", "The metadata parser failed unexpectedly.");
+    }
+}
+//# sourceMappingURL=analyze.js.map

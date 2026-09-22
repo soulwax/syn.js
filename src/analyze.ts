@@ -76,20 +76,31 @@ function hintWarnings(
   hints: AudioHints | undefined,
 ): readonly AudioWarning[] {
   const warnings: AudioWarning[] = [];
+  const declaredMimeType = hints?.mimeType
+    ?.trim()
+    .toLowerCase()
+    .split(";", 1)[0];
   const mimeFormat = hints?.mimeType
     ? findAudioFormatByMimeType(hints.mimeType)
     : null;
-  if (mimeFormat && mimeFormat.id !== detectedId) {
+  if (
+    declaredMimeType &&
+    declaredMimeType !== "application/octet-stream" &&
+    mimeFormat?.id !== detectedId
+  ) {
     warnings.push({
       code: "mime_mismatch",
       message:
         "The declared MIME type does not match the detected audio format.",
     });
   }
-  const extensionFormat = hints?.fileName
-    ? findAudioFormatByExtension(hints.fileName)
+  const fileName = hints?.fileName?.trim() ?? "";
+  const extensionFormat = fileName
+    ? findAudioFormatByExtension(fileName)
     : null;
-  if (extensionFormat && extensionFormat.id !== detectedId) {
+  const extension = fileName.split(".").at(-1);
+  const hasExtension = Boolean(extension && extension !== fileName);
+  if (hasExtension && extensionFormat?.id !== detectedId) {
     warnings.push({
       code: "extension_mismatch",
       message:
