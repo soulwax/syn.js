@@ -1,5 +1,5 @@
-export { analyzeAudio } from "./analyze.js";
-export type { AnalyzeOptions, AudioHints, AudioInput } from "./analyze.js";
+export { analyzeAudio, analyzeWebStream } from "./analyze.js";
+export type { AnalyzeOptions, AudioHints, AudioInput, StreamAudioHints, } from "./analyze.js";
 export { AudioMetadataError } from "./errors.js";
 export type { AudioMetadataErrorCode } from "./errors.js";
 export { AUDIO_ACCEPT, AUDIO_FORMATS, detectAudioFormat, findAudioFormatByExtension, findAudioFormatByMimeType, } from "./formats.js";

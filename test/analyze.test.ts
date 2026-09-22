@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { analyzeAudio, AudioMetadataError } from "../src/index.js";
+import {
+  analyzeAudio,
+  analyzeWebStream,
+  AudioMetadataError,
+} from "../src/index.js";
 import { waveFixture } from "./fixtures.js";
+
+function webStream(chunks: readonly Uint8Array[]): ReadableStream<Uint8Array> {
+  let index = 0;
+  return new ReadableStream({
+    pull(controller) {
+      const chunk = chunks[index++];
+      if (chunk) controller.enqueue(chunk);
+      else controller.close();
+    },
+  });
+}
 
 describe("analyzeAudio", () => {
   it("parses a synthetic WAV and returns normalized technical metadata", async () => {
@@ -122,5 +137,35 @@ describe("analyzeAudio", () => {
     await expect(
       analyzeAudio(waveFixture(), undefined, { signal: controller.signal }),
     ).rejects.toBeInstanceOf(AudioMetadataError);
+  });
+
+  it("parses a Web stream after replaying a split detection header", async () => {
+    const wave = waveFixture();
+    const result = await analyzeWebStream(
+      webStream([wave.slice(0, 2), wave.slice(2, 17), wave.slice(17)]),
+      { fileName: "tone.wav", mimeType: "audio/wav", size: wave.byteLength },
+    );
+
+    expect(result).toMatchObject({
+      format: { id: "wav", sampleRate: 8000, channels: 1 },
+      warnings: [],
+    });
+  });
+
+  it("requires a bounded, trustworthy stream size before reading", async () => {
+    const source = new ReadableStream<Uint8Array>();
+
+    await expect(
+      analyzeWebStream(source, { size: 129 * 1024 * 1024 }),
+    ).rejects.toMatchObject({ code: "file_too_large" });
+    expect(source.locked).toBe(false);
+  });
+
+  it("rejects a stream that exceeds its declared size", async () => {
+    const wave = waveFixture();
+
+    await expect(
+      analyzeWebStream(webStream([wave]), { size: 1 }),
+    ).rejects.toMatchObject({ code: "hint_mismatch" });
   });
 });

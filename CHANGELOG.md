@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `analyzeWebStream` for bounded metadata inspection of Web byte streams with required trusted size
+  metadata, container detection, and prefix replay into the parser.
+
 ### Changed
 
 - Strict hint validation now rejects unknown filename extensions and non-generic MIME declarations.

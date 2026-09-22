@@ -38,6 +38,25 @@ console.log(analysis.format.codec, analysis.tags.title, analysis.tags.artists);
 Byte detection is authoritative. Filename and MIME values are untrusted hints: mismatches become
 warnings by default or `AudioMetadataError` with code `hint_mismatch` in strict mode.
 
+## Analyze a Web stream
+
+```ts
+import { analyzeWebStream } from "syn.js";
+
+const analysis = await analyzeWebStream(upload.body, {
+  fileName: upload.name,
+  mimeType: upload.contentType,
+  size: upload.contentLength,
+});
+```
+
+`analyzeWebStream` reads until it has a 4 KiB detection prefix, then replays every pulled chunk to
+the parser without concatenating the source into a second file-sized buffer. `size` is mandatory:
+obtain it from trusted object-storage metadata or a validated `Content-Length`; it is the admission
+limit used to reject oversized streams before they are read. This API accepts Web
+`ReadableStream<Uint8Array>` values, including the streams exposed by modern server runtimes. It
+does not accept arbitrary Node streams.
+
 ## Detect without parsing
 
 ```ts
@@ -54,7 +73,8 @@ security boundary.
 
 Embedded artwork is disabled by default. Opt in with `includeArtwork`, `maxArtworkBytes`, and
 `maxArtworkCount`. `maxArtworkBytes` is both the per-image and aggregate ceiling. Source files
-default to a 128 MiB limit.
+default to a 128 MiB limit. Stream callers must pass a trusted size and the stream is stopped if it
+emits more bytes than declared.
 
 The parser runs in-process. `AbortSignal` is checked before reading and before returning, but it is
 not a hard CPU timeout. Use a worker/process boundary if your threat model requires forced

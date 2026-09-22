@@ -1,10 +1,11 @@
-import { parseBuffer } from "music-metadata";
+import { parseBuffer, parseWebStream } from "music-metadata";
 import { AudioMetadataError } from "./errors.js";
 import { detectAudioFormat, findAudioFormatByExtension, findAudioFormatByMimeType, } from "./formats.js";
 import { normalizeMetadata, } from "./metadata.js";
 const DEFAULT_MAX_FILE_BYTES = 128 * 1024 * 1024;
 const DEFAULT_MAX_ARTWORK_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_ARTWORK_COUNT = 4;
+const FORMAT_HEADER_BYTES = 4096;
 function positiveLimit(value, fallback, name) {
     const resolved = value ?? fallback;
     if (!Number.isSafeInteger(resolved) || resolved <= 0) {
@@ -63,6 +64,120 @@ function hintWarnings(detectedId, hints) {
     }
     return warnings;
 }
+function parserOptions(options, detectedContentType, size, fileName) {
+    return [
+        {
+            mimeType: detectedContentType,
+            size,
+            ...(fileName ? { path: fileName } : {}),
+        },
+        {
+            duration: options.duration ?? true,
+            skipCovers: !(options.includeArtwork ?? false),
+        },
+    ];
+}
+function validateHints(detectedId, hints, strictHints) {
+    const warnings = hintWarnings(detectedId, hints);
+    if (strictHints && warnings.length > 0) {
+        throw new AudioMetadataError("hint_mismatch", "Declared audio hints do not match the detected format.");
+    }
+    return warnings;
+}
+function requireStreamSize(hints, maxFileBytes) {
+    if (!Number.isSafeInteger(hints.size) || hints.size < 0) {
+        throw new AudioMetadataError("hint_mismatch", "The declared stream size must be a non-negative safe integer.");
+    }
+    if (hints.size === 0) {
+        throw new AudioMetadataError("empty_input", "Audio input is empty.");
+    }
+    if (hints.size > maxFileBytes) {
+        throw new AudioMetadataError("file_too_large", "Audio input exceeds the configured size limit.");
+    }
+    return hints.size;
+}
+async function readFormatHeader(reader, declaredSize, signal) {
+    const chunks = [];
+    let readBytes = 0;
+    while (readBytes < FORMAT_HEADER_BYTES) {
+        abortIfNeeded(signal);
+        const { done, value } = await reader.read();
+        if (done)
+            break;
+        readBytes += value.byteLength;
+        if (readBytes > declaredSize) {
+            await cancelReader(reader, "Stream exceeds its declared size.");
+            throw new AudioMetadataError("hint_mismatch", "The stream exceeds its declared size.");
+        }
+        chunks.push(value);
+    }
+    return chunks;
+}
+async function cancelReader(reader, reason) {
+    try {
+        await reader.cancel(reason);
+    }
+    catch {
+        // Preserve the original analysis failure when the source is already errored.
+    }
+}
+function joinChunks(chunks) {
+    const length = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+    const joined = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+        joined.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+    return joined;
+}
+function replayStream(reader, prefix, declaredSize, signal) {
+    let prefixIndex = 0;
+    let emittedBytes = 0;
+    return new ReadableStream({
+        async pull(controller) {
+            try {
+                abortIfNeeded(signal);
+                const next = prefixIndex < prefix.length
+                    ? prefix[prefixIndex++]
+                    : (await reader.read()).value;
+                if (!next) {
+                    controller.close();
+                    return;
+                }
+                emittedBytes += next.byteLength;
+                if (emittedBytes > declaredSize) {
+                    throw new AudioMetadataError("hint_mismatch", "The stream exceeds its declared size.");
+                }
+                controller.enqueue(next);
+            }
+            catch (cause) {
+                await cancelReader(reader, cause);
+                controller.error(cause);
+            }
+        },
+        async cancel(reason) {
+            await cancelReader(reader, reason);
+        },
+    });
+}
+function assertAudioProperties(parsed) {
+    const hasAudioProperties = Boolean(parsed.format.codec) ||
+        (parsed.format.sampleRate ?? 0) > 0 ||
+        (parsed.format.numberOfChannels ?? 0) > 0 ||
+        (parsed.format.bitrate ?? 0) > 0;
+    if (!hasAudioProperties) {
+        throw new AudioMetadataError("malformed_audio", "The file has no parseable audio stream.");
+    }
+}
+function parseFailure(cause) {
+    if (cause instanceof AudioMetadataError)
+        throw cause;
+    if (cause instanceof Error) {
+        throw new AudioMetadataError("malformed_audio", "The audio file could not be parsed.", { cause });
+    }
+    throw new AudioMetadataError("parser_failure", "The metadata parser failed unexpectedly.");
+}
 export async function analyzeAudio(input, hints, options = {}) {
     const maxFileBytes = positiveLimit(options.maxFileBytes, DEFAULT_MAX_FILE_BYTES, "maxFileBytes");
     const maxArtworkBytes = positiveLimit(options.maxArtworkBytes, DEFAULT_MAX_ARTWORK_BYTES, "maxArtworkBytes");
@@ -77,26 +192,10 @@ export async function analyzeAudio(input, hints, options = {}) {
     if (!detected) {
         throw new AudioMetadataError("unsupported_format", "The audio format is not supported.");
     }
-    const warnings = hintWarnings(detected.id, hints);
-    if (options.strictHints && warnings.length > 0) {
-        throw new AudioMetadataError("hint_mismatch", "Declared audio hints do not match the detected format.");
-    }
+    const warnings = validateHints(detected.id, hints, options.strictHints);
     try {
-        const parsed = await parseBuffer(bytes, {
-            mimeType: detected.contentType,
-            size: bytes.byteLength,
-            ...(hints?.fileName ? { path: hints.fileName } : {}),
-        }, {
-            duration: options.duration ?? true,
-            skipCovers: !(options.includeArtwork ?? false),
-        });
-        const hasAudioProperties = Boolean(parsed.format.codec) ||
-            (parsed.format.sampleRate ?? 0) > 0 ||
-            (parsed.format.numberOfChannels ?? 0) > 0 ||
-            (parsed.format.bitrate ?? 0) > 0;
-        if (!hasAudioProperties) {
-            throw new AudioMetadataError("malformed_audio", "The file has no parseable audio stream.");
-        }
+        const parsed = await parseBuffer(bytes, ...parserOptions(options, detected.contentType, bytes.byteLength, hints?.fileName));
+        assertAudioProperties(parsed);
         abortIfNeeded(options.signal);
         return normalizeMetadata(detected, parsed, {
             includeArtwork: options.includeArtwork ?? false,
@@ -105,14 +204,43 @@ export async function analyzeAudio(input, hints, options = {}) {
         }, warnings);
     }
     catch (cause) {
-        if (cause instanceof AudioMetadataError)
-            throw cause;
-        if (cause instanceof Error) {
-            throw new AudioMetadataError("malformed_audio", "The audio file could not be parsed.", {
-                cause,
-            });
+        return parseFailure(cause);
+    }
+}
+/**
+ * Analyze a Web byte stream without first creating a second full-file buffer.
+ *
+ * The supplied size is a required admission limit, not a value inferred from
+ * the stream. Pass trusted object-storage metadata or a validated
+ * Content-Length value. syn.js reads until it has a 4 KiB detection prefix,
+ * then replays each pulled chunk into music-metadata.
+ */
+export async function analyzeWebStream(stream, hints, options = {}) {
+    const maxFileBytes = positiveLimit(options.maxFileBytes, DEFAULT_MAX_FILE_BYTES, "maxFileBytes");
+    const maxArtworkBytes = positiveLimit(options.maxArtworkBytes, DEFAULT_MAX_ARTWORK_BYTES, "maxArtworkBytes");
+    const maxArtworkCount = positiveLimit(options.maxArtworkCount, DEFAULT_MAX_ARTWORK_COUNT, "maxArtworkCount");
+    abortIfNeeded(options.signal);
+    const declaredSize = requireStreamSize(hints, maxFileBytes);
+    const reader = stream.getReader();
+    try {
+        const prefix = await readFormatHeader(reader, declaredSize, options.signal);
+        const detected = detectAudioFormat(joinChunks(prefix));
+        if (!detected) {
+            throw new AudioMetadataError("unsupported_format", "The audio format is not supported.");
         }
-        throw new AudioMetadataError("parser_failure", "The metadata parser failed unexpectedly.");
+        const warnings = validateHints(detected.id, hints, options.strictHints);
+        const parsed = await parseWebStream(replayStream(reader, prefix, declaredSize, options.signal), ...parserOptions(options, detected.contentType, declaredSize, hints.fileName));
+        assertAudioProperties(parsed);
+        abortIfNeeded(options.signal);
+        return normalizeMetadata(detected, parsed, {
+            includeArtwork: options.includeArtwork ?? false,
+            maxArtworkBytes,
+            maxArtworkCount,
+        }, warnings);
+    }
+    catch (cause) {
+        await cancelReader(reader, cause);
+        return parseFailure(cause);
     }
 }
 //# sourceMappingURL=analyze.js.map
