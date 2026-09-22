@@ -1,0 +1,69 @@
+{
+  "name": "syn.js",
+  "version": "0.1.0",
+  "description": "Bounded audio format detection and normalized music metadata for server-side JavaScript.",
+  "type": "module",
+  "license": "MIT",
+  "author": "soulwax",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/soulwax/syn.js.git"
+  },
+  "homepage": "https://github.com/soulwax/syn.js#readme",
+  "bugs": "https://github.com/soulwax/syn.js/issues",
+  "keywords": [
+    "audio",
+    "metadata",
+    "mp3",
+    "flac",
+    "aac",
+    "m4a",
+    "ogg",
+    "wav",
+    "webm"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test --run && pnpm build && pnpm pack --dry-run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint src test vitest.config.ts",
+    "test": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "music-metadata": "11.15.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.5.2",
+    "@vitest/coverage-v8": "4.1.8",
+    "eslint": "10.0.1",
+    "globals": "17.6.0",
+    "prettier": "3.8.3",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.60.1",
+    "vitest": "4.1.8"
+  },
+  "packageManager": "pnpm@11.21.0"
+}
