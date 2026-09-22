@@ -25,6 +25,22 @@ describe("analyzeAudio", () => {
     expect(result.format.durationSeconds).toBeCloseTo(0.001);
   });
 
+  it("accepts ArrayBuffer and Blob inputs", async () => {
+    const wave = waveFixture();
+    const buffer = wave.buffer.slice(
+      wave.byteOffset,
+      wave.byteOffset + wave.byteLength,
+    ) as ArrayBuffer;
+    const blob = new Blob([buffer], { type: "audio/wav" });
+
+    await expect(analyzeAudio(buffer)).resolves.toMatchObject({
+      format: { id: "wav" },
+    });
+    await expect(analyzeAudio(blob)).resolves.toMatchObject({
+      format: { id: "wav" },
+    });
+  });
+
   it("reports a renamed file and can reject it in strict mode", async () => {
     const result = await analyzeAudio(waveFixture(), {
       fileName: "tone.mp3",
@@ -60,6 +76,25 @@ describe("analyzeAudio", () => {
     ).rejects.toMatchObject({
       code: "file_too_large",
     });
+  });
+
+  it("rejects malformed data after recognizing its container", async () => {
+    const truncatedWave = waveFixture().slice(0, 12);
+
+    await expect(analyzeAudio(truncatedWave)).rejects.toMatchObject({
+      code: "malformed_audio",
+    });
+  });
+
+  it("checks a declared size and validates configured limits", async () => {
+    await expect(
+      analyzeAudio(waveFixture(), { size: 1 }),
+    ).rejects.toMatchObject({
+      code: "hint_mismatch",
+    });
+    await expect(
+      analyzeAudio(waveFixture(), undefined, { maxArtworkCount: 0 }),
+    ).rejects.toBeInstanceOf(RangeError);
   });
 
   it("observes an already-aborted signal", async () => {

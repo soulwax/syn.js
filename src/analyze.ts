@@ -159,6 +159,17 @@ export async function analyzeAudio(
         skipCovers: !(options.includeArtwork ?? false),
       },
     );
+    const hasAudioProperties =
+      Boolean(parsed.format.codec) ||
+      (parsed.format.sampleRate ?? 0) > 0 ||
+      (parsed.format.numberOfChannels ?? 0) > 0 ||
+      (parsed.format.bitrate ?? 0) > 0;
+    if (!hasAudioProperties) {
+      throw new AudioMetadataError(
+        "malformed_audio",
+        "The file has no parseable audio stream.",
+      );
+    }
     abortIfNeeded(options.signal);
     return normalizeMetadata(
       detected,
